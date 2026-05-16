@@ -1,80 +1,59 @@
 """
 run_eval.py — Compare Approach A vs B on eval questions. Logs to W&B.
 
-For each question:
-  - Run Approach A retrieval + Gemini generation
-  - Run Approach B retrieval + Gemini generation
-  - Gemini self-judges answer relevancy (1-5)
-  - Tracks: context_hit_rate, answer_relevancy, latency_ms, cost_usd,
-            figures_retrieved, tables_retrieved
-
-Usage:
-  source ~/envs/rag/bin/activate
-  cd /scratch/ngangada/portfolio/colpali-multimodal-rag
-  python scripts/run_eval.py --config configs/config.yaml
+Requires GPU (submit via sol/run_eval.slurm).
+Approach A uses sentence-transformer on CPU (small model, fast).
+Approach B uses ColQwen2 on GPU (7B model, needs A100).
+Gemini API handles generation — no GPU needed for that step.
 """
 
 from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
-from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s — %(message)s")
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).parent.parent / ".env")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s"
+)
 log = logging.getLogger("run_eval")
-
-
-def context_hit(results_a: dict, results_b: list, ground_truth_paper: str, ground_truth_page: int) -> tuple[int, int]:
-    """
-    Returns (hit_a, hit_b): 1 if ground truth paper+page appears in top results, else 0.
-    Lenient: matches if filename contains the arxiv ID.
-    """
-    def _check_a(ctx):
-        all_results = ctx.get("text_results", []) + ctx.get("figure_results", []) + ctx.get("table_results", [])
-        for r in all_results:
-            fname = r.get("filename", "")
-            pnum = r.get("page_num", -1)
-            if ground_truth_paper in fname and abs(pnum - ground_truth_page) <= 1:
-                return 1
-        return 0
-
-    def _check_b(pages):
-        for r in pages:
-            fname = r.get("filename", "")
-            pnum = r.get("page_num", -1)
-            if ground_truth_paper in fname and abs(pnum - ground_truth_page) <= 1:
-                return 1
-        return 0
-
-    return _check_a(results_a), _check_b(results_b)
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/config.yaml")
-    parser.add_argument("--max_questions", type=int, default=None,
-                        help="Limit questions for quick test (e.g. --max_questions 10)")
+    parser.add_argument("--max_questions", type=int, default=None)
     args = parser.parse_args()
 
     import yaml
-    with open(args.config) as f:
-        cfg = yaml.safe_load(f)
+    cfg = yaml.safe_load(open(args.config))
+
+    # Sentence-transformer runs on CPU — small model, no need for GPU
+    # ColQwen2 runs on GPU — needed for Approach B retrieval
+    cfg["models"]["text_embedder_device"] = "cpu"
+    cfg["models"]["colpali_device"] = "cuda"
 
     # Load eval questions
-    qa_path = cfg["paths"]["eval_qa_pairs"]
+    qa_path = Path(cfg["paths"]["eval_qa_pairs"])
+    if not qa_path.exists() or qa_path.stat().st_size == 0:
+        log.error(f"qa_pairs.json missing or empty at {qa_path}")
+        sys.exit(1)
+
     with open(qa_path) as f:
         qa_pairs = json.load(f)
     if args.max_questions:
         qa_pairs = qa_pairs[:args.max_questions]
     log.info(f"Evaluating {len(qa_pairs)} questions")
 
-    # Init W&B
     import wandb
     run = wandb.init(
         project=cfg["wandb"]["project"],
@@ -83,37 +62,47 @@ def main():
         config={"num_questions": len(qa_pairs)},
     )
 
-    # Init retrievers + generator
+    # Init retrievers
     from src.retrievers.hybrid_retriever import HybridRetriever
     from src.retrievers.colpali_retriever import ColPaliRetriever
     from src.generator import GeminiGenerator
 
+    log.info("Loading Approach A retriever (CPU)...")
     retriever_a = HybridRetriever(cfg=cfg)
+
+    log.info("Loading Approach B retriever (GPU)...")
     retriever_b = ColPaliRetriever(cfg=cfg)
+
+    log.info("Loading Gemini generator...")
     generator = GeminiGenerator(cfg=cfg)
 
     results_log = []
     metrics_a = {"hit": [], "relevancy": [], "latency": [], "cost": [], "figures": [], "tables": []}
-    metrics_b = {"hit": [], "relevancy": [], "latency": [], "cost": [], "figures": [], "tables": []}
+    metrics_b = {"hit": [], "relevancy": [], "latency": [], "cost": [], "pages": []}
 
     for i, qa in enumerate(qa_pairs):
         question = qa["question"]
         gt_paper = qa.get("ground_truth_paper", "")
-        gt_page = qa.get("ground_truth_page", -1)
-        log.info(f"[{i+1}/{len(qa_pairs)}] {question[:70]} …")
+        gt_page  = qa.get("ground_truth_page", -1)
+        log.info(f"[{i+1}/{len(qa_pairs)}] {question[:70]}")
 
         # ── Approach A ───────────────────────────────────────────────────────
         t0 = time.perf_counter()
-        ctx_a = retriever_a.retrieve(question)
-        gen_a = generator.generate_approach_a(question, ctx_a)
-        latency_a = (time.perf_counter() - t0) * 1000
+        ctx_a  = retriever_a.retrieve(question)
+        gen_a  = generator.generate_approach_a(question, ctx_a)
+        lat_a  = (time.perf_counter() - t0) * 1000
+        rel_a  = generator.judge_relevancy(question, gen_a["answer"])
 
-        relevancy_a = generator.judge_relevancy(question, gen_a["answer"])
-        hit_a, _ = context_hit(ctx_a, [], gt_paper, gt_page)
+        # context hit: did the right paper appear?
+        hit_a = 0
+        for r in ctx_a["text_results"] + ctx_a["figure_results"] + ctx_a["table_results"]:
+            if gt_paper in r.get("filename", "") and abs(r.get("page_num", -99) - gt_page) <= 1:
+                hit_a = 1
+                break
 
         metrics_a["hit"].append(hit_a)
-        metrics_a["relevancy"].append(relevancy_a)
-        metrics_a["latency"].append(latency_a)
+        metrics_a["relevancy"].append(rel_a)
+        metrics_a["latency"].append(lat_a)
         metrics_a["cost"].append(gen_a["cost_usd"])
         metrics_a["figures"].append(1 if ctx_a["has_figures"] else 0)
         metrics_a["tables"].append(1 if ctx_a["has_tables"] else 0)
@@ -121,67 +110,76 @@ def main():
         # ── Approach B ───────────────────────────────────────────────────────
         t0 = time.perf_counter()
         pages_b = retriever_b.retrieve(question)
-        gen_b = generator.generate_approach_b(question, pages_b)
-        latency_b = (time.perf_counter() - t0) * 1000
+        gen_b   = generator.generate_approach_b(question, pages_b)
+        lat_b   = (time.perf_counter() - t0) * 1000
+        rel_b   = generator.judge_relevancy(question, gen_b["answer"])
 
-        relevancy_b = generator.judge_relevancy(question, gen_b["answer"])
-        _, hit_b = context_hit(ctx_a, pages_b, gt_paper, gt_page)
+        hit_b = 0
+        for p in pages_b:
+            if gt_paper in p.get("filename", "") and abs(p.get("page_num", -99) - gt_page) <= 1:
+                hit_b = 1
+                break
 
         metrics_b["hit"].append(hit_b)
-        metrics_b["relevancy"].append(relevancy_b)
-        metrics_b["latency"].append(latency_b)
+        metrics_b["relevancy"].append(rel_b)
+        metrics_b["latency"].append(lat_b)
         metrics_b["cost"].append(gen_b["cost_usd"])
-        metrics_b["figures"].append(len(pages_b))
-        metrics_b["tables"].append(0)
+        metrics_b["pages"].append(len(pages_b))
 
-        # W&B per-question log
+        # Per-question W&B log
         run.log({
-            "q/index": i,
-            "approach_a/hit": hit_a,
-            "approach_a/relevancy": relevancy_a,
-            "approach_a/latency_ms": latency_a,
-            "approach_a/cost_usd": gen_a["cost_usd"],
-            "approach_b/hit": hit_b,
-            "approach_b/relevancy": relevancy_b,
-            "approach_b/latency_ms": latency_b,
-            "approach_b/cost_usd": gen_b["cost_usd"],
+            "q/index":               i,
+            "approach_a/hit":        hit_a,
+            "approach_a/relevancy":  rel_a,
+            "approach_a/latency_ms": lat_a,
+            "approach_a/cost_usd":   gen_a["cost_usd"],
+            "approach_b/hit":        hit_b,
+            "approach_b/relevancy":  rel_b,
+            "approach_b/latency_ms": lat_b,
+            "approach_b/cost_usd":   gen_b["cost_usd"],
         })
 
         results_log.append({
             "question": question,
-            "approach_a": {"answer": gen_a["answer"], "hit": hit_a, "relevancy": relevancy_a,
-                           "latency_ms": latency_a, "cost_usd": gen_a["cost_usd"]},
-            "approach_b": {"answer": gen_b["answer"], "hit": hit_b, "relevancy": relevancy_b,
-                           "latency_ms": latency_b, "cost_usd": gen_b["cost_usd"]},
+            "approach_a": {
+                "answer": gen_a["answer"], "hit": hit_a,
+                "relevancy": rel_a, "latency_ms": lat_a, "cost_usd": gen_a["cost_usd"],
+            },
+            "approach_b": {
+                "answer": gen_b["answer"], "hit": hit_b,
+                "relevancy": rel_b, "latency_ms": lat_b, "cost_usd": gen_b["cost_usd"],
+            },
         })
 
-    # ── Summary metrics ───────────────────────────────────────────────────────
-    def avg(lst): return sum(lst) / max(len(lst), 1)
+        log.info(f"  A: hit={hit_a} rel={rel_a} ${gen_a['cost_usd']:.5f} | "
+                 f"B: hit={hit_b} rel={rel_b} ${gen_b['cost_usd']:.5f}")
+
+    # ── Summary ───────────────────────────────────────────────────────────────
+    def avg(lst): return round(sum(lst) / max(len(lst), 1), 4)
 
     summary = {
         "approach_a": {
-            "context_hit_rate": avg(metrics_a["hit"]),
-            "answer_relevancy": avg(metrics_a["relevancy"]),
-            "avg_latency_ms": avg(metrics_a["latency"]),
-            "total_cost_usd": sum(metrics_a["cost"]),
+            "context_hit_rate":      avg(metrics_a["hit"]),
+            "answer_relevancy":      avg(metrics_a["relevancy"]),
+            "avg_latency_ms":        avg(metrics_a["latency"]),
+            "total_cost_usd":        round(sum(metrics_a["cost"]), 5),
             "figures_retrieved_rate": avg(metrics_a["figures"]),
-            "tables_retrieved_rate": avg(metrics_a["tables"]),
+            "tables_retrieved_rate":  avg(metrics_a["tables"]),
         },
         "approach_b": {
-            "context_hit_rate": avg(metrics_b["hit"]),
-            "answer_relevancy": avg(metrics_b["relevancy"]),
-            "avg_latency_ms": avg(metrics_b["latency"]),
-            "total_cost_usd": sum(metrics_b["cost"]),
-            "figures_retrieved_rate": avg(metrics_b["figures"]),
-            "tables_retrieved_rate": 0.0,
+            "context_hit_rate":      avg(metrics_b["hit"]),
+            "answer_relevancy":      avg(metrics_b["relevancy"]),
+            "avg_latency_ms":        avg(metrics_b["latency"]),
+            "total_cost_usd":        round(sum(metrics_b["cost"]), 5),
+            "avg_pages_retrieved":   avg(metrics_b["pages"]),
         },
     }
 
     log.info("\n=== EVAL SUMMARY ===")
     for approach, m in summary.items():
-        log.info(f"\n{approach.upper()}:")
+        log.info(f"\n{approach}:")
         for k, v in m.items():
-            log.info(f"  {k}: {v:.4f}")
+            log.info(f"  {k}: {v}")
 
     # Log summary to W&B
     flat = {}

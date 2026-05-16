@@ -73,7 +73,7 @@ class GeminiGenerator:
         contents = []
         # Add text context
         if context.get("context_str"):
-            contents.append(types.Part.from_text(
+            contents.append(types.Part.from_text(text=
                 f"RETRIEVED CONTEXT:\n{context['context_str']}\n\nQUESTION: {query}"
             ))
 
@@ -84,7 +84,7 @@ class GeminiGenerator:
                 try:
                     img_bytes = base64.b64decode(b64)
                     contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
-                    contents.append(types.Part.from_text(
+                    contents.append(types.Part.from_text(text=
                         f"[Figure from {fig.get('filename', '')} p.{fig.get('page_num', '')}]"
                     ))
                 except Exception:
@@ -101,7 +101,7 @@ class GeminiGenerator:
         from PIL import Image as PILImage
         import io
 
-        contents = [types.Part.from_text(f"QUESTION: {query}\n\nRelevant paper pages are attached below. Answer using what you see in them.")]
+        contents = [types.Part.from_text(text=f"QUESTION: {query}\n\nRelevant paper pages are attached below. Answer using what you see in them.")]
 
         for page in page_results:
             img_path = page.get("image_path", "")
@@ -110,7 +110,7 @@ class GeminiGenerator:
                     with open(img_path, "rb") as f:
                         img_bytes = f.read()
                     contents.append(types.Part.from_bytes(data=img_bytes, mime_type="image/png"))
-                    contents.append(types.Part.from_text(
+                    contents.append(types.Part.from_text(text=
                         f"[Page {page['page_num']} of {page['filename']} — relevance score: {page['score']:.3f}]"
                     ))
                 except Exception as exc:
@@ -167,7 +167,7 @@ class GeminiGenerator:
         try:
             response = self.client.models.generate_content(
                 model=self.model_name,
-                contents=[types.Part.from_text(judge_prompt)],
+                contents=[types.Part.from_text(text=judge_prompt)],
                 config=types.GenerateContentConfig(temperature=0.0, max_output_tokens=5),
             )
             score = int(response.text.strip()[0])
