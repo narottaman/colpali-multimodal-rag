@@ -1,0 +1,40 @@
+# =============================================================================
+# colpali-multimodal-rag — Requirements
+# Install into existing Sol venv: source ~/envs/rag/bin/activate
+# Already in venv: torch, transformers, sentence-transformers, docling,
+#   chromadb, wandb, huggingface_hub, gradio
+# Run: pip install -r requirements.txt (skips already-installed packages)
+# =============================================================================
+
+# --- Approach B: ColPali multi-vector retrieval ---
+colpali-engine>=0.3.0
+
+# --- Vector DB for Approach B (multi-vector native support) ---
+qdrant-client>=1.9.0
+
+# --- Qwen2-VL helper (tokenization + image processing) ---
+qwen-vl-utils>=0.0.8
+
+# --- Image processing ---
+pillow>=10.0.0
+
+# --- PDF page rendering to PNG (Approach B pipeline) ---
+pymupdf>=1.24.0
+
+# --- Gemini API (generator, eval judge) ---
+google-genai>=0.8.0
+
+# --- Config loading ---
+pyyaml>=6.0
+
+# --- Already in venv but pinned here for reproducibility ---
+# torch>=2.1.0
+# transformers>=4.40.0
+# sentence-transformers>=2.7.0
+# docling>=2.0.0
+# chromadb>=0.5.0
+# wandb>=0.17.0
+# huggingface_hub>=0.23.0
+# gradio>=4.0.0
+# prefect>=3.0.0
+python-dotenv>=1.0.0

@@ -216,3 +216,55 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Chroma DB folders
+chroma_db_*/
+chroma_db_fixed/
+chroma_db_fixed_flat/
+chroma_db_paragraph/
+chroma_db_sentence/
+
+# WandB logs
+wandb/
+
+# Optional: ignore binary/index files
+*.bin
+*.pickle
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual env
+.venv/
+
+/data/processed/pages/
+/data/qdrant_db/
+/logs/
+
+/data/processed/pages/
+/data/qdrant_db/
+/logs/
+
+
+# Data files
+data/processed/pages/
+data/chroma_db/
+data/qdrant_db/
+data/raw/
+data/eval/
+wandb/
+logs/
+*.npz
+*.zip
+*.sqlite
+*.png
+*.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyc
+.env

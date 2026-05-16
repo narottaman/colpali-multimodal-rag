@@ -1,0 +1,71 @@
+# =============================================================================
+# colpali-multimodal-rag — Master Configuration
+# Single source of truth for all paths, model names, and hyperparameters.
+# All scripts load this file at startup. Never hardcode values elsewhere.
+# =============================================================================
+
+paths:
+  project_root: "/scratch/ngangada/portfolio/colpali-multimodal-rag"
+  data_raw_pdfs: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/raw/pdfs"
+  data_processed: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/processed"
+  figures_dir: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/processed/figures"
+  tables_dir: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/processed/tables"
+  pages_dir: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/processed/pages"
+  chroma_db_dir: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/chroma_db"
+  qdrant_db_dir: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/qdrant_db"
+  eval_qa_pairs: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/eval/qa_pairs.json"
+  eval_results: "/scratch/ngangada/portfolio/colpali-multimodal-rag/data/eval/results"
+
+models:
+  qwen_vl: "Qwen/Qwen2-VL-7B-Instruct"
+  qwen_vl_max_new_tokens: 200
+  qwen_vl_device: "cuda"
+  text_embedder: "sentence-transformers/all-MiniLM-L6-v2"
+  text_embedder_device: "cuda"
+  colpali: "vidore/colqwen2-v1.0"
+  colpali_device: "cuda"
+  gemini_model: "gemini-2.5-flash-lite-preview-06-17"
+  gemini_max_output_tokens: 512
+  gemini_temperature: 0.3
+
+extraction:
+  do_table_structure: true
+  generate_picture_images: true
+  min_paragraph_chars: 80
+  max_chunk_chars: 1200
+  chunk_overlap_chars: 150
+  page_render_dpi: 150
+
+chroma:
+  text_collection: "approach_a_text"
+  figure_collection: "approach_a_figures"
+  table_collection: "approach_a_tables"
+  top_k_text: 3
+  top_k_figures: 2
+  top_k_tables: 2
+
+qdrant:
+  collection_name: "approach_b_pages"
+  vector_size: 128
+  top_k_pages: 3
+
+eval:
+  num_questions: 100
+  relevancy_judge_model: "gemini-2.5-flash-lite-preview-06-17"
+  gemini_cost_per_1k_input_tokens: 0.000075
+  gemini_cost_per_1k_output_tokens: 0.0003
+
+wandb:
+  project: "colpali-multimodal-rag"
+  entity: null
+  base_tags: ["colpali", "multimodal", "rag", "asu"]
+
+slurm:
+  partition: "gpu"
+  nodes: 1
+  gpus_per_node: 1
+  cpus_per_task: 8
+  mem_gb: 64
+  time_limit_hours: 8
+  venv_path: "~/.venv"
+  log_dir: "/scratch/ngangada/portfolio/colpali-multimodal-rag/logs"
