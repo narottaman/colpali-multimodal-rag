@@ -42,7 +42,84 @@ Evaluated on 10 questions across 10 foundational AI papers. Both approaches use 
 **Answer relevancy is equal at 3.0/5** on this 10-question smoke test. This reflects question difficulty rather than a fundamental difference — both approaches retrieve meaningful context, but hard questions (e.g., exact formula recall) require precise chunk-level matching that neither fully achieves at this scale.
 
 ---
+## Live Demo Screenshots
+### Demo
 
+### Approach A — Structured RAG (FAISS + Qwen2-VL figures)
+
+![ColPali UI Overview](docs/screenshots/ui_overview.png)
+*Full UI showing Approach A selected, ADHD-friendly bullet answer, and retrieved figure gallery*
+
+**Answer quality** — Approach A retrieves text chunks, Qwen2-VL figure descriptions,
+and table summaries separately, then merges them. The answer cites Figure 2 explicitly
+because the figure description was indexed and retrieved alongside the text.
+
+![Approach A Retrieved Figure](docs/screenshots/approach_a_figure.png)
+*Multi-Head Attention diagram extracted by Docling and described by Qwen2-VL-7B*
+
+---
+
+### Approach B — Visual RAG (ColQwen2 patch embeddings + full page images)
+
+![Approach B UI](docs/screenshots/approach_b_answer.png)
+*Approach B selected — Gemini reads full PDF page images directly, no OCR needed*
+
+**Retrieved pages sent to Gemini:**
+
+![Transformer Architecture Page](docs/screenshots/approach_b_page1.png)
+*Page 3 — Full Transformer architecture diagram retrieved by ColQwen2 patch similarity*
+
+![Scaled Dot-Product Page](docs/screenshots/approach_b_page2.png)
+*Page 4 — Exact page containing the attention formula, diagram, and surrounding text*
+
+**Why Approach B hits 80% vs Approach A's 60%:** ColQwen2 embeds the entire page
+as ~196 visual patches. The formula, diagram, and surrounding text are all captured
+in one embedding. Approach A splits these into separate text/figure/table collections
+which can miss cross-element context on the same page.
+
+### Approach A — Structured RAG (FAISS text + figures + tables)
+
+Query: *"What is the scaled dot-product attention formula?"*
+
+**Answer generated:**
+```
+The scaled dot-product attention formula is Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V.
+• The input consists of queries (Q) and keys (K) of dimension d_k, and values (V) of dimension d_v.
+• The dot products of the query with all keys are computed.
+• Each dot product is divided by sqrt(d_k) to scale it.
+• A softmax function is applied to obtain weights on the values.
+• Figure 2 illustrates the Scaled Dot-Product Attention mechanism.
+🔑 Key Takeaway: Scaling dot products by 1/sqrt(d_k) prevents the softmax from entering
+regions with extremely small gradients for large values of d_k.
+
+📚 3 text · 2 figs · 2 tables · ⏱ 1553ms · 💰 $0.00019
+```
+
+**Retrieved figures** — Approach A extracts individual figure regions from the paper:
+the Multi-Head Attention diagram and the attention visualization figure.
+
+### Approach B — Visual RAG (ColQwen2 + Qdrant page images)
+
+Same query via Approach B retrieves 3 full PDF pages and sends them directly to Gemini:
+
+```
+The scaled dot-product attention formula is Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V.
+• This formula computes attention weights by taking the dot product of Q and K,
+  scaling by sqrt(d_k), then applying softmax.
+• The resulting weights compute a weighted sum of the values (V).
+• This method is used in both single-layer and multi-head attention mechanisms.
+• The scaling factor sqrt(d_k) counteracts extremely small gradients for large d_k.
+🔑 Key Takeaway: Scaled dot-product attention calculates attention weights by scaling
+the dot product of queries and keys before applying softmax.
+
+📄 3 pages · ⏱ 1703ms · 💰 $0.00014
+```
+
+**Retrieved pages** — Approach B surfaces the exact paper pages containing Figure 2
+(Scaled Dot-Product Attention diagram), Figure 1 (full Transformer architecture),
+and the page with the MultiHead formula — giving Gemini full visual context.
+
+---
 ## Architecture
 
 ### Approach A — Structured Multimodal RAG
@@ -319,84 +396,7 @@ Built as a portfolio project targeting AI/ML engineering roles. Part of a broade
 
 ---
 
-## Live Demo Screenshots
-### Demo
 
-### Approach A — Structured RAG (FAISS + Qwen2-VL figures)
-
-![ColPali UI Overview](docs/screenshots/ui_overview.png)
-*Full UI showing Approach A selected, ADHD-friendly bullet answer, and retrieved figure gallery*
-
-**Answer quality** — Approach A retrieves text chunks, Qwen2-VL figure descriptions,
-and table summaries separately, then merges them. The answer cites Figure 2 explicitly
-because the figure description was indexed and retrieved alongside the text.
-
-![Approach A Retrieved Figure](docs/screenshots/approach_a_figure.png)
-*Multi-Head Attention diagram extracted by Docling and described by Qwen2-VL-7B*
-
----
-
-### Approach B — Visual RAG (ColQwen2 patch embeddings + full page images)
-
-![Approach B UI](docs/screenshots/approach_b_answer.png)
-*Approach B selected — Gemini reads full PDF page images directly, no OCR needed*
-
-**Retrieved pages sent to Gemini:**
-
-![Transformer Architecture Page](docs/screenshots/approach_b_page1.png)
-*Page 3 — Full Transformer architecture diagram retrieved by ColQwen2 patch similarity*
-
-![Scaled Dot-Product Page](docs/screenshots/approach_b_page2.png)
-*Page 4 — Exact page containing the attention formula, diagram, and surrounding text*
-
-**Why Approach B hits 80% vs Approach A's 60%:** ColQwen2 embeds the entire page
-as ~196 visual patches. The formula, diagram, and surrounding text are all captured
-in one embedding. Approach A splits these into separate text/figure/table collections
-which can miss cross-element context on the same page.
-
-### Approach A — Structured RAG (FAISS text + figures + tables)
-
-Query: *"What is the scaled dot-product attention formula?"*
-
-**Answer generated:**
-```
-The scaled dot-product attention formula is Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V.
-• The input consists of queries (Q) and keys (K) of dimension d_k, and values (V) of dimension d_v.
-• The dot products of the query with all keys are computed.
-• Each dot product is divided by sqrt(d_k) to scale it.
-• A softmax function is applied to obtain weights on the values.
-• Figure 2 illustrates the Scaled Dot-Product Attention mechanism.
-🔑 Key Takeaway: Scaling dot products by 1/sqrt(d_k) prevents the softmax from entering
-regions with extremely small gradients for large values of d_k.
-
-📚 3 text · 2 figs · 2 tables · ⏱ 1553ms · 💰 $0.00019
-```
-
-**Retrieved figures** — Approach A extracts individual figure regions from the paper:
-the Multi-Head Attention diagram and the attention visualization figure.
-
-### Approach B — Visual RAG (ColQwen2 + Qdrant page images)
-
-Same query via Approach B retrieves 3 full PDF pages and sends them directly to Gemini:
-
-```
-The scaled dot-product attention formula is Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V.
-• This formula computes attention weights by taking the dot product of Q and K,
-  scaling by sqrt(d_k), then applying softmax.
-• The resulting weights compute a weighted sum of the values (V).
-• This method is used in both single-layer and multi-head attention mechanisms.
-• The scaling factor sqrt(d_k) counteracts extremely small gradients for large d_k.
-🔑 Key Takeaway: Scaled dot-product attention calculates attention weights by scaling
-the dot product of queries and keys before applying softmax.
-
-📄 3 pages · ⏱ 1703ms · 💰 $0.00014
-```
-
-**Retrieved pages** — Approach B surfaces the exact paper pages containing Figure 2
-(Scaled Dot-Product Attention diagram), Figure 1 (full Transformer architecture),
-and the page with the MultiHead formula — giving Gemini full visual context.
-
----
 
 ## Why This Is ADHD-Friendly and Research-Friendly
 
