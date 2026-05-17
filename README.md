@@ -320,7 +320,7 @@ Built as a portfolio project targeting AI/ML engineering roles. Part of a broade
 ---
 
 ## Live Demo Screenshots
-## Demo
+### Demo
 
 ### Approach A — Structured RAG (FAISS + Qwen2-VL figures)
 
