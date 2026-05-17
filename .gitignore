@@ -240,21 +240,8 @@ __pycache__/
 # Virtual env
 .venv/
 
-/data/processed/pages/
-/data/qdrant_db/
-/logs/
-
-/data/processed/pages/
-/data/qdrant_db/
-/logs/
-
 
 # Heavy data files
-data/processed/pages/
-data/chroma_db/*.npz
-data/qdrant_db/
-data/raw/pdfs/
-data/raw/hf_dataset/
 wandb/
 logs/
 *.png

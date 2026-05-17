@@ -1,0 +1,31 @@
+# =============================================================================
+# requirements_laptop.txt — Laptop UI only (no GPU, no large models)
+# pip install -r requirements_laptop.txt
+# =============================================================================
+
+# UI
+gradio>=4.0.0
+
+# Approach A retrieval (tiny sentence-transformer, ~90MB)
+sentence-transformers>=2.7.0
+faiss-cpu>=1.8.0
+
+# Approach B retrieval (ColQwen2 query embedding on CPU — small op)
+colpali-engine==0.3.1
+qdrant-client>=1.9.0
+
+# Image handling
+pillow>=10.0.0
+
+# Gemini generator
+google-genai>=0.8.0
+
+# Config / utils
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Pinned for compatibility (same as Sol)
+transformers==4.49.0
+peft==0.14.0
+torchao==0.6.1
+torch>=2.0.0   # CPU version is fine, ~250MB vs 2GB GPU version
