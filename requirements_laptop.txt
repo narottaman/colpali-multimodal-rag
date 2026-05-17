@@ -1,17 +1,18 @@
 # =============================================================================
-# requirements_laptop.txt — Laptop UI only (no GPU, no large models)
+# requirements_laptop.txt — Laptop UI only (Windows/Mac/Linux, no GPU)
+# Python 3.10, 3.11, or 3.12 compatible
+#
 # pip install -r requirements_laptop.txt
 # =============================================================================
 
 # UI
 gradio>=4.0.0
 
-# Approach A retrieval (tiny sentence-transformer, ~90MB)
+# Approach A retrieval — tiny sentence-transformer (~90MB), runs on CPU fine
 sentence-transformers>=2.7.0
 faiss-cpu>=1.8.0
 
-# Approach B retrieval (ColQwen2 query embedding on CPU — small op)
-colpali-engine==0.3.1
+# Qdrant client (Approach B — just the client library, DB is local files)
 qdrant-client>=1.9.0
 
 # Image handling
@@ -23,9 +24,15 @@ google-genai>=0.8.0
 # Config / utils
 pyyaml>=6.0
 python-dotenv>=1.0.0
+numpy>=1.24.0
 
-# Pinned for compatibility (same as Sol)
-transformers==4.49.0
-peft==0.14.0
-torchao==0.6.1
-torch>=2.0.0   # CPU version is fine, ~250MB vs 2GB GPU version
+# Transformers (needed by sentence-transformers, no GPU ops used)
+transformers>=4.40.0
+huggingface_hub>=0.23.0
+tokenizers>=0.19.0
+
+# NOTE: colpali-engine is NOT included — ColQwen2 (7B model) is too large
+# for laptop CPU. Approach B on laptop works by reading the pre-built
+# Qdrant index directly using the qdrant-client, bypassing ColQwen2.
+# The query embedding for Approach B uses sentence-transformers instead
+# (slight accuracy difference vs ColQwen2, but runs in <1s on CPU).

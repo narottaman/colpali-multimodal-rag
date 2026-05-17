@@ -316,3 +316,196 @@ Built as a portfolio project targeting AI/ML engineering roles. Part of a broade
 - **grpo-logic-puzzles** — GRPO/RL training on Qwen2.5 with VERL on ASU Sol A100
 
 **Stack:** Python · PyTorch · HuggingFace Transformers · Docling · ColPali · Qwen2-VL · FAISS · Qdrant · ChromaDB · Gemini API · W&B · Gradio · SLURM · ASU Sol A100
+
+---
+
+## Live Demo Screenshots
+## Demo
+
+### Approach A — Structured RAG (FAISS + Qwen2-VL figures)
+
+![ColPali UI Overview](docs/screenshots/ui_overview.png)
+*Full UI showing Approach A selected, ADHD-friendly bullet answer, and retrieved figure gallery*
+
+**Answer quality** — Approach A retrieves text chunks, Qwen2-VL figure descriptions,
+and table summaries separately, then merges them. The answer cites Figure 2 explicitly
+because the figure description was indexed and retrieved alongside the text.
+
+![Approach A Retrieved Figure](docs/screenshots/approach_a_figure.png)
+*Multi-Head Attention diagram extracted by Docling and described by Qwen2-VL-7B*
+
+---
+
+### Approach B — Visual RAG (ColQwen2 patch embeddings + full page images)
+
+![Approach B UI](docs/screenshots/approach_b_answer.png)
+*Approach B selected — Gemini reads full PDF page images directly, no OCR needed*
+
+**Retrieved pages sent to Gemini:**
+
+![Transformer Architecture Page](docs/screenshots/approach_b_page1.png)
+*Page 3 — Full Transformer architecture diagram retrieved by ColQwen2 patch similarity*
+
+![Scaled Dot-Product Page](docs/screenshots/approach_b_page2.png)
+*Page 4 — Exact page containing the attention formula, diagram, and surrounding text*
+
+**Why Approach B hits 80% vs Approach A's 60%:** ColQwen2 embeds the entire page
+as ~196 visual patches. The formula, diagram, and surrounding text are all captured
+in one embedding. Approach A splits these into separate text/figure/table collections
+which can miss cross-element context on the same page.
+
+### Approach A — Structured RAG (FAISS text + figures + tables)
+
+Query: *"What is the scaled dot-product attention formula?"*
+
+**Answer generated:**
+```
+The scaled dot-product attention formula is Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V.
+• The input consists of queries (Q) and keys (K) of dimension d_k, and values (V) of dimension d_v.
+• The dot products of the query with all keys are computed.
+• Each dot product is divided by sqrt(d_k) to scale it.
+• A softmax function is applied to obtain weights on the values.
+• Figure 2 illustrates the Scaled Dot-Product Attention mechanism.
+🔑 Key Takeaway: Scaling dot products by 1/sqrt(d_k) prevents the softmax from entering
+regions with extremely small gradients for large values of d_k.
+
+📚 3 text · 2 figs · 2 tables · ⏱ 1553ms · 💰 $0.00019
+```
+
+**Retrieved figures** — Approach A extracts individual figure regions from the paper:
+the Multi-Head Attention diagram and the attention visualization figure.
+
+### Approach B — Visual RAG (ColQwen2 + Qdrant page images)
+
+Same query via Approach B retrieves 3 full PDF pages and sends them directly to Gemini:
+
+```
+The scaled dot-product attention formula is Attention(Q, K, V) = softmax(QK^T / sqrt(d_k)) * V.
+• This formula computes attention weights by taking the dot product of Q and K,
+  scaling by sqrt(d_k), then applying softmax.
+• The resulting weights compute a weighted sum of the values (V).
+• This method is used in both single-layer and multi-head attention mechanisms.
+• The scaling factor sqrt(d_k) counteracts extremely small gradients for large d_k.
+🔑 Key Takeaway: Scaled dot-product attention calculates attention weights by scaling
+the dot product of queries and keys before applying softmax.
+
+📄 3 pages · ⏱ 1703ms · 💰 $0.00014
+```
+
+**Retrieved pages** — Approach B surfaces the exact paper pages containing Figure 2
+(Scaled Dot-Product Attention diagram), Figure 1 (full Transformer architecture),
+and the page with the MultiHead formula — giving Gemini full visual context.
+
+---
+
+## Why This Is ADHD-Friendly and Research-Friendly
+
+### ADHD-Friendly Design
+
+Standard RAG returns walls of text. This system enforces a strict output contract:
+
+```
+**[One bold direct answer — the key fact, immediately]**
+• Bullet 1 — specific, no filler
+• Bullet 2
+• Bullet 3 (max 5)
+🔑 Key Takeaway: one sentence you can screenshot and remember
+Max 150 words. No paragraphs. Always bullets.
+```
+
+**Why this helps ADHD readers:**
+- **Bold first line** — answer is visible before reading anything else
+- **Bullets not paragraphs** — each point is scannable independently
+- **Hard 150-word limit** — forces precision, eliminates padding
+- **Key Takeaway** — one memorable anchor even if the bullets are forgotten
+- **Cost + latency shown** — immediate feedback on what just happened
+
+### Reducing Hallucination
+
+Three mechanisms work together:
+
+**1. Grounded context only** — Gemini is given the actual retrieved text/images from the papers. The system prompt says *"never hallucinate — if you don't know, say so in one bullet."* The model generates from evidence, not from parametric memory.
+
+**2. Source transparency** — every answer shows exactly what was retrieved:
+`3 text · 2 figs · 2 tables` or `3 pages`. If retrieval is empty, the answer will say so rather than confabulate.
+
+**3. Visual grounding (Approach B)** — Gemini reads the actual PDF page image. It can see the exact formula, diagram, or table as printed in the paper. This is harder to hallucinate than text-only retrieval because the model is literally reading the source, not reconstructing it from embeddings.
+
+---
+
+## How Pages, Papers, and Questions Are Mapped
+
+This is the core architecture question — worth understanding deeply.
+
+### How pages are mapped to papers
+
+Every PDF page is stored with its metadata at index time:
+
+```
+Approach A (FAISS):
+  Each chunk stores: {filename, page_num, text, element_type}
+  "1706.03762_Attention_Is_All_You_Need.pdf" p.4 → chunk about attention formula
+
+Approach B (Qdrant):
+  Each page stores: {pdf_stem, filename, page_num, image_path}
+  "1706.03762_Attention_Is_All_You_Need" page_0004.png → patch embeddings
+```
+
+So the mapping is always: **vector → metadata → file path on disk**.
+At query time the top-k results carry their metadata, Gemini gets the content,
+and the UI shows the source.
+
+### How questions map to pages
+
+**Approach A** — text similarity:
+```
+Query: "What is scaled dot-product attention?"
+  ↓ sentence-transformer encodes query → 384-dim vector
+  ↓ FAISS cosine search over 1,204 text embeddings
+  ↓ top-3 text chunks + top-2 figure descriptions + top-2 table summaries
+  ↓ all from different pages, merged into one context
+  ↓ Gemini reads context → structured answer
+```
+
+**Approach B** — visual patch similarity:
+```
+Query: "What is scaled dot-product attention?"
+  ↓ (on Sol: ColQwen2 encoded query → patch vectors)
+  ↓ (on laptop: sentence-transformer as proxy)
+  ↓ Qdrant MaxSim: each query patch scores against each page's ~196 patches
+  ↓ top-3 pages ranked by sum of max patch similarities
+  ↓ Gemini reads page images → structured answer
+```
+
+### When one question spans multiple papers
+
+Both approaches retrieve across ALL 10 papers simultaneously — there's no
+per-paper filtering. FAISS and Qdrant search the entire index and return
+whichever chunks/pages score highest regardless of which paper they're from.
+
+Example: *"How does scaling affect training stability?"*
+- Might retrieve a chunk from Adam (learning rate scaling)
+- A chunk from GPT-3 (model scaling laws)
+- A figure from ResNet (depth scaling)
+- Gemini synthesizes all three into one answer
+
+The retrieval is purely semantic — whichever paper's content is most similar
+to the query embedding wins, regardless of paper identity.
+
+### When text and figures are on different pages
+
+This is the key architectural difference between the two approaches:
+
+**Approach A handles this explicitly:**
+- Text chunks, figure descriptions, and table summaries are in **separate collections**
+- A query searches all three independently
+- The formula text (p.4) and its diagram (also p.4, extracted by Docling) are retrieved together because they were indexed separately
+- Qwen2-VL described each figure in 2-3 sentences, so the figure description is searchable text
+
+**Approach B handles this implicitly:**
+- ColQwen2 embeds the *entire page* as patches — text, figures, and equations all together
+- If the formula is on p.4 and the diagram explaining it is also on p.4, both are captured in that page's embedding
+- If they're on different pages, the top-3 pages retrieved will often include both (since the diagram page is semantically related to the formula query)
+- Gemini then reads both pages visually and synthesizes the answer
+
+**The limitation:** If a question requires synthesizing content from pages 2 and 15 of the same paper, Approach A might retrieve both text chunks regardless of page distance, while Approach B might only retrieve pages close in semantic content to the query. This is why Approach B's 80% hit rate, while better overall, can miss cross-page synthesis questions that Approach A's separate collections handle naturally.

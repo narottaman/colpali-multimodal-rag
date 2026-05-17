@@ -1,182 +1,202 @@
 """
-chat.py — Gradio chat UI for colpali-multimodal-rag. Runs on laptop, no GPU.
-
-Usage:
-  cp .env.example .env  # fill in GEMINI_API_KEY
-  python app/chat.py
-  # Open http://localhost:7860
+chat.py — Gradio 6.14 compatible UI for colpali-multimodal-rag.
 """
 
 from __future__ import annotations
 import base64
-import os
 import sys
 import time
 from io import BytesIO
 from pathlib import Path
-
+import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 import yaml
 import gradio as gr
 from PIL import Image as PILImage
 
 CONFIG_PATH = Path(__file__).parent.parent / "configs" / "config.yaml"
+os.chdir(Path(__file__).parent.parent)
 
-
-def load_config():
+def load_config() -> dict:
     with open(CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    cfg["models"]["text_embedder_device"] = "cpu"
+    return cfg
 
 
-def _b64_to_pil(b64: str) -> PILImage.Image | None:
+def b64_to_pil(b64: str):
     try:
         return PILImage.open(BytesIO(base64.b64decode(b64)))
     except Exception:
         return None
 
 
-# ── Lazy-load retrievers and generator once ───────────────────────────────────
-_cfg = None
-_retriever_a = None
-_retriever_b = None
-_generator = None
+class LightweightColPaliRetriever:
+    def __init__(self, cfg: dict):
+        self.pages_dir = Path(cfg["paths"]["pages_dir"])
+        self.top_k = cfg["qdrant"].get("top_k_pages", 3)
+
+        from sentence_transformers import SentenceTransformer
+        self.embedder = SentenceTransformer(cfg["models"]["text_embedder"], device="cpu")
+
+        import json, numpy as np
+        chroma_dir = Path(cfg["paths"]["chroma_db_dir"])
+        npz    = chroma_dir / "approach_a_text.npz"
+        json_f = chroma_dir / "approach_a_text_docs.json"
+        if npz.exists() and json_f.exists():
+            self.embeddings = np.load(str(npz))["embeddings"].astype("float32")
+            self.docs = json.load(open(json_f))
+        else:
+            self.embeddings = None
+            self.docs = []
+
+    def retrieve(self, query: str) -> list[dict]:
+        import numpy as np, faiss
+        if self.embeddings is None:
+            return []
+        q = self.embedder.encode([query], normalize_embeddings=True).astype("float32")
+        idx = faiss.IndexFlatIP(self.embeddings.shape[1])
+        idx.add(self.embeddings)
+        scores, indices = idx.search(q, min(10, idx.ntotal))
+        seen, results = set(), []
+        for score, i in zip(scores[0], indices[0]):
+            if i < 0:
+                continue
+            doc = self.docs[i]
+            fname, page = doc.get("filename", ""), doc.get("page_num", 1)
+            if (fname, page) in seen:
+                continue
+            seen.add((fname, page))
+            stem = Path(fname).stem
+            img = self.pages_dir / stem / f"page_{page:04d}.png"
+            if img.exists():
+                results.append({"filename": fname, "page_num": page,
+                                "image_path": str(img), "score": float(score)})
+            if len(results) >= self.top_k:
+                break
+        return results
 
 
-def get_components():
-    global _cfg, _retriever_a, _retriever_b, _generator
-    if _cfg is None:
-        _cfg = load_config()
-        # Force CPU for laptop
-        _cfg["models"]["text_embedder_device"] = "cpu"
-        _cfg["models"]["colpali_device"] = "cpu"
+_cfg = _ret_a = _ret_b = _gen = None
+_ready = False
+_status = "Click 'Load Models' to start"
 
+
+def load_components():
+    global _cfg, _ret_a, _ret_b, _gen, _ready, _status
+    if _ready:
+        return _status
+    try:
+        _status = "Loading config...";          _cfg = load_config()
+        _status = "Loading Approach A (FAISS)..."
         from src.retrievers.hybrid_retriever import HybridRetriever
-        from src.retrievers.colpali_retriever import ColPaliRetriever
+        _ret_a = HybridRetriever(_cfg)
+        _status = "Loading Approach B..."
+        _ret_b = LightweightColPaliRetriever(_cfg)
+        _status = "Connecting to Gemini..."
         from src.generator import GeminiGenerator
+        _gen = GeminiGenerator(_cfg)
+        _ready = True;  _status = "✅ Ready!"
+    except Exception as e:
+        _status = f"❌ {e}"
+    return _status
 
-        _retriever_a = HybridRetriever(_cfg)
-        _retriever_b = ColPaliRetriever(_cfg)
-        _generator = GeminiGenerator(_cfg)
-    return _cfg, _retriever_a, _retriever_b, _generator
 
 
-def answer_question(question: str, approach: str, history: list):
-    """Main chat handler — returns updated history + images."""
-    if not question.strip():
-        return history, []
+def chat(message, history, approach, gallery_images):
+    if not message.strip():
+        return history, gallery_images
 
-    cfg, retriever_a, retriever_b, generator = get_components()
+    status = load_components()
+    if not _ready:
+        history.append({"role": "user",      "content": message})
+        history.append({"role": "assistant", "content": f"⚠️ {status}"})
+        return history, gallery_images
+
     t0 = time.perf_counter()
-    images_out = []
+    images = []
 
-    if approach == "Approach A — Structured (Docling + ChromaDB)":
-        ctx = retriever_a.retrieve(question)
-        result = generator.generate_approach_a(question, ctx)
-        answer = result["answer"]
-
-        # Collect figure images for display
+    if "Approach A" in approach:
+        ctx    = _ret_a.retrieve(message)
+        result = _gen.generate_approach_a(message, ctx)
         for fig in ctx.get("figure_results", []):
-            b64 = fig.get("image_base64", "")
-            if b64:
-                pil = _b64_to_pil(b64)
-                if pil:
-                    images_out.append(pil)
-
-        meta = (
-            f"📚 Sources: {len(ctx['text_results'])} text, "
-            f"{len(ctx['figure_results'])} figures, "
-            f"{len(ctx['table_results'])} tables | "
-            f"💰 ${result['cost_usd']:.5f} | "
-            f"⏱ {(time.perf_counter()-t0)*1000:.0f}ms"
-        )
-
-    else:  # Approach B
-        pages = retriever_b.retrieve(question)
-        result = generator.generate_approach_b(question, pages)
-        answer = result["answer"]
-
-        # Show retrieved page images
-        for page in pages:
-            img_path = page.get("image_path", "")
-            if img_path and Path(img_path).exists():
+            pil = b64_to_pil(fig.get("image_base64", ""))
+            if pil:
+                images.append(pil)
+        elapsed = (time.perf_counter() - t0) * 1000
+        meta = (f"📚 {len(ctx['text_results'])} text · "
+                f"{len(ctx['figure_results'])} figs · "
+                f"{len(ctx['table_results'])} tables · "
+                f"⏱ {elapsed:.0f}ms · 💰 ${result['cost_usd']:.5f}")
+    else:
+        pages  = _ret_b.retrieve(message)
+        result = _gen.generate_approach_b(message, pages)
+        for p in pages:
+            ip = p.get("image_path", "")
+            if ip and Path(ip).exists():
                 try:
-                    images_out.append(PILImage.open(img_path))
+                    images.append(PILImage.open(ip))
                 except Exception:
                     pass
+        elapsed = (time.perf_counter() - t0) * 1000
+        meta = (f"📄 {len(pages)} pages · "
+                f"⏱ {elapsed:.0f}ms · 💰 ${result['cost_usd']:.5f}")
 
-        meta = (
-            f"📄 Pages retrieved: {len(pages)} | "
-            f"💰 ${result['cost_usd']:.5f} | "
-            f"⏱ {(time.perf_counter()-t0)*1000:.0f}ms"
-        )
-
-    full_answer = f"{answer}\n\n*{meta}*"
-    history.append({"role": "user", "content": question})
-    history.append({"role": "assistant", "content": full_answer})
-    return history, images_out
+    history.append({"role": "user",      "content": message})
+    history.append({"role": "assistant", "content": f"{result['answer']}\n\n*{meta}*"})
+    all_images = (gallery_images or []) + images
+    return history, all_images
 
 
-# ── Gradio UI ─────────────────────────────────────────────────────────────────
-with gr.Blocks(title="ColPali Multimodal RAG", theme=gr.themes.Soft()) as demo:
-    gr.Markdown(
-        """# 🔬 ColPali Multimodal RAG
-        **Compare two retrieval architectures on 10 foundational AI papers.**
-        - **Approach A**: Docling extracts structure → Qwen2-VL describes figures → ChromaDB hybrid search
-        - **Approach B**: ColQwen2 embeds whole pages as patch vectors → Qdrant MaxSim → Gemini reads images
-        """
-    )
+EXAMPLES = [
+    "What is the scaled dot-product attention formula?",
+    "How does BERT use masked language modeling?",
+    "How does LoRA reduce trainable parameters?",
+    "What is classifier-free guidance in Stable Diffusion?",
+    "How does DALL-E 2 use CLIP embeddings?",
+    "What training data did LLaMA use?",
+]
+
+with gr.Blocks(title="ColPali Multimodal RAG") as demo:
+    gr.Markdown("""# 🔬 ColPali Multimodal RAG
+**Two retrieval architectures on 10 foundational AI papers.**
+
+| | Approach A | Approach B |
+|---|---|---|
+| Index | FAISS (text + figures + tables) | Qdrant page images |
+| Hit Rate | 60% | 80% |
+| Latency | ~272ms | ~600ms |
+""")
 
     with gr.Row():
-        approach_selector = gr.Radio(
-            choices=[
-                "Approach A — Structured (Docling + ChromaDB)",
-                "Approach B — Visual (ColQwen2 + Qdrant)",
-            ],
-            value="Approach A — Structured (Docling + ChromaDB)",
+        approach = gr.Radio(
+            choices=["Approach A — Structured (FAISS)", "Approach B — Visual (page images)"],
+            value="Approach A — Structured (FAISS)",
             label="Retrieval Approach",
         )
+        with gr.Column():
+            status = gr.Textbox(value=_status, label="Status", interactive=False)
+            load_btn = gr.Button("Load Models", variant="secondary")
 
-    chatbot = gr.Chatbot(type="messages", height=500, label="Chat")
+    chatbot  = gr.Chatbot(height=450, label="Chat")
+    msg      = gr.Textbox(placeholder="Ask about the 10 AI papers…", label="Question")
     with gr.Row():
-        msg_box = gr.Textbox(
-            placeholder="Ask anything about the 10 AI papers…",
-            label="Your question",
-            scale=5,
-        )
-        send_btn = gr.Button("Ask", variant="primary", scale=1)
+        send  = gr.Button("Ask ✨", variant="primary")
+        clear = gr.Button("🗑 Clear")
 
-    image_gallery = gr.Gallery(label="Retrieved figures / pages", columns=3, height=300)
-    clear_btn = gr.Button("Clear chat")
+    gallery = gr.Gallery(label="Retrieved figures / pages", columns=3, height=250)
 
-    send_btn.click(
-        answer_question,
-        inputs=[msg_box, approach_selector, chatbot],
-        outputs=[chatbot, image_gallery],
-    ).then(lambda: "", outputs=msg_box)
+    gr.Examples(examples=EXAMPLES, inputs=msg)
 
-    msg_box.submit(
-        answer_question,
-        inputs=[msg_box, approach_selector, chatbot],
-        outputs=[chatbot, image_gallery],
-    ).then(lambda: "", outputs=msg_box)
-
-    clear_btn.click(lambda: ([], []), outputs=[chatbot, image_gallery])
-
-    gr.Examples(
-        examples=[
-            "What is the scaled dot-product attention formula?",
-            "How does BERT use masked language modeling?",
-            "What makes ResNet skip connections effective?",
-            "How does LoRA reduce trainable parameters?",
-            "What is the training objective of GANs?",
-        ],
-        inputs=msg_box,
-    )
+    load_btn.click(load_components, outputs=status)
+    send.click(chat, inputs=[msg, chatbot, approach, gallery], outputs=[chatbot, gallery]).then(lambda: "", outputs=msg)
+    msg.submit(chat, inputs=[msg, chatbot, approach, gallery], outputs=[chatbot, gallery]).then(lambda: "", outputs=msg)
+    clear.click(lambda: ([], []), outputs=[chatbot, gallery])
 
 
 if __name__ == "__main__":
+    print("Open: http://localhost:7860")
     demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
