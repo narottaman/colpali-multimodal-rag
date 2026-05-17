@@ -244,10 +244,6 @@ __pycache__/
 # Heavy data files
 wandb/
 logs/
-*.png
-*.pdf
-*.zip
-*.sqlite
 __pycache__/
 *.pyc
 
